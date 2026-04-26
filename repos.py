@@ -56,6 +56,7 @@ def main():
                   "\n--addfile <filename>: Adds file name to get commited to"
                   "\n--commit <\"NameOfCommit\">: Adds a commit using the name given as the argument"
                   "\n--makebranch <User> <Repo> <branchname>: Creates a remote branch"
+                  "\n--makerelease <User> <Repo> <Executable/Directory/.> -tag <v1.0.0>: Creates a GitHub release using RELEASE.md in the given path"
                   "\n--cleartoken: Clears the stored GitHub token")
             return
 
@@ -148,6 +149,67 @@ def main():
                     print(f"Error {create_resp.status_code}: {create_resp.text}")
             else:
                 print(f"Error {ref_resp.status_code}: {ref_resp.text}")
+
+        if "--makerelease" in args:
+            idx = args.index("--makerelease")
+            user, repo, target = args[idx + 1], args[idx + 2], args[idx + 3]
+
+            tag = "v1.0.0"
+            if "-tag" in args:
+                tag = args[args.index("-tag") + 1]
+
+            if target == ".":
+                search_dir = os.getcwd()
+            elif os.path.isdir(target):
+                search_dir = target
+            else:
+                search_dir = os.path.dirname(os.path.abspath(target))
+
+            release_md = os.path.join(search_dir, "RELEASE.md")
+            if not os.path.exists(release_md):
+                print(f"Error: RELEASE.md not found in {search_dir}")
+            else:
+                with open(release_md, "r") as f:
+                    release_body = f.read()
+
+                release_resp = requests.post(
+                    f"https://api.github.com/repos/{user}/{repo}/releases",
+                    json={"tag_name": tag, "name": tag, "body": release_body, "draft": False, "prerelease": False},
+                    headers=headers
+                )
+
+                if release_resp.status_code == 201:
+                    release_data = release_resp.json()
+                    upload_url = release_data["upload_url"].replace("{?name,label}", "")
+                    print(f"Release {tag} created: {release_data['html_url']}")
+
+                    if os.path.isfile(target):
+                        exe_path = target
+                    else:
+                        exe_path = None
+                        for f_name in os.listdir(search_dir):
+                            f_path = os.path.join(search_dir, f_name)
+                            if os.path.isfile(f_path) and os.access(f_path, os.X_OK) and f_name != "RELEASE.md":
+                                exe_path = f_path
+                                break
+
+                    if exe_path:
+                        exe_name = os.path.basename(exe_path)
+                        upload_headers = {**headers, "Content-Type": "application/octet-stream"}
+                        with open(exe_path, "rb") as ef:
+                            up_resp = requests.post(
+                                f"{upload_url}?name={exe_name}",
+                                headers=upload_headers,
+                                data=ef
+                            )
+                        if up_resp.status_code == 201:
+                            print(f"Uploaded asset: {exe_name}")
+                        else:
+                            print(f"Asset upload failed {up_resp.status_code}: {up_resp.text}")
+                    else:
+                        print("No executable asset found to upload.")
+                else:
+                    print(f"Release failed {release_resp.status_code}: {release_resp.text}")
 
     except (IndexError, requests.exceptions.RequestException) as e:
         print(f"Error: {e}")
