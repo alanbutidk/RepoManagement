@@ -5,6 +5,7 @@ import sys
 import keyring
 from keyrings.alt.file import PlaintextKeyring
 import pwinput
+import requests
 import json
 
 def get_shared_token():
@@ -54,6 +55,7 @@ def main():
                   "\n--pulldata <branch>: Pulls from origin"
                   "\n--addfile <filename>: Adds file name to get commited to"
                   "\n--commit <\"NameOfCommit\">: Adds a commit using the name given as the argument"
+                  "\n--makebranch <User> <Repo> <branchname>: Creates a remote branch"
                   "\n--cleartoken: Clears the stored GitHub token")
             return
 
@@ -66,15 +68,9 @@ def main():
             return
 
         if "--cleartoken" in args:
-            if platform.system() == "Windows":
-                directory = os.path.join(os.environ.get('ProgramData', 'C:\\ProgramData'), 'RepoM')
-            else:
-                directory = '/var/lib/RepoM'
+            directory = os.path.join(os.environ.get('ProgramData', 'C:\\ProgramData'), 'RepoM') if platform.system() == "Windows" else '/var/lib/RepoM'
             kr = PlaintextKeyring()
             kr.file_path = os.path.join(directory, "st.cfg")
-            if not os.path.exists(kr.file_path):
-                directory = os.path.expanduser("~/.repom")
-                kr.file_path = os.path.join(directory, "st.cfg")
             keyring.set_keyring(kr)
             try:
                 keyring.delete_password("RepoM", "df")
@@ -83,41 +79,30 @@ def main():
                 print("No token found to clear.")
             return
 
+        token = get_shared_token()
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "RepoM-CLI-App"
+        }
+
         if "--makerepo" in args:
-            token = get_shared_token()
             repo_name = args[args.index("--makerepo") + 1]
-            cmd = [
-                "curl", "-s", "-X", "POST",
-                "-H", f"Authorization: token {token}",
-                "-d", json.dumps({"name": repo_name}),
-                "https://api.github.com/user/repos"
-            ]
-            result = s.run(cmd, capture_output=True, text=True)
-            if result.stdout.strip():
-                data = json.loads(result.stdout)
-                repo_url = data.get("html_url")
-                if repo_url:
-                    print(f"Repository created: {repo_url}")
-                    if "--set_asorigin" in args:
-                        s.run(["git", "remote", "add", "origin", repo_url])
-                        s.run(["git", "branch", "-M", "main"])
-                        print(f"Origin set to: {repo_url}")
-                else:
-                    print(f"GitHub Error: {data.get('message', 'Check your token scopes.')}")
+            resp = requests.post("https://api.github.com/user/repos", json={"name": repo_name}, headers=headers)
+            if resp.status_code == 201:
+                repo_url = resp.json().get("html_url")
+                print(f"Repository created: {repo_url}")
             else:
-                print("Error: No response from GitHub. Verify your token and connection.")
+                print(f"GitHub Error {resp.status_code}: {resp.text}")
 
         if "--delete" in args:
-            token = get_shared_token()
             idx = args.index("--delete")
             user, repo = args[idx + 1], args[idx + 2]
-            cmd = [
-                "curl", "-s", "-X", "DELETE",
-                "-H", f"Authorization: token {token}",
-                f"https://github.com{user}/{repo}"
-            ]
-            s.run(cmd)
-            print(f"Request sent to delete: {user}/{repo}")
+            resp = requests.delete(f"https://api.github.com/repos/{user}/{repo}", headers=headers)
+            if resp.status_code == 204:
+                print(f"Successfully deleted: {user}/{repo}")
+            else:
+                print(f"Delete failed {resp.status_code}: {resp.text}")
 
         if "--initrepo" in args:
             s.run(["git", "init"])
@@ -131,48 +116,42 @@ def main():
         if "--addfile" in args:
             filename = args[args.index("--addfile") + 1]
             s.run(["git", "add", filename])
-            print(f"Added: {filename} to commits")
+            print(f"Added: {filename}")
             
         if "--commit" in args:
             commitname = args[args.index("--commit") + 1]
             s.run(["git", "commit", "-m", commitname])
-            print(f"Commit added with name: {commitname}")
+            print(f"Committed: {commitname}")
             
         if "--pushdata" in args:
             branchname = args[args.index("--pushdata") + 1]
             s.run(["git", "push", "origin", branchname])
-            print(f"Pushed data to branch: {branchname}")
             
         if "--pulldata" in args:
             branchname = args[args.index("--pulldata") + 1]
             s.run(["git", "pull", "origin", branchname])
-            print(f"Pulled data from branch: {branchname}")
 
         if "--makebranch" in args:
-            token = get_shared_token()
             idx = args.index("--makebranch")
             user, repo, new_branch = args[idx + 1], args[idx + 2], args[idx + 3]
-            get_ref_cmd = ["curl", "-s", "-L", "-H", f"Authorization: token {token}", f"https://github.com{user}/{repo}/git/refs/heads/main"]
-            resp = s.run(get_ref_cmd, capture_output=True, text=True)
-            if resp.stdout.strip():
-                ref_data = json.loads(resp.stdout)
-                if 'object' in ref_data:
-                    sha = ref_data['object']['sha']
-                    create_cmd = [
-                        "curl", "-s", "-X", "POST",
-                        "-H", f"Authorization: token {token}",
-                        "-d", json.dumps({"ref": f"refs/heads/{new_branch}", "sha": sha}),
-                        f"https://github.com{user}/{repo}/git/refs"
-                    ]
-                    s.run(create_cmd)
+            ref_resp = requests.get(f"https://api.github.com/repos/{user}/{repo}/git/refs/heads/main", headers=headers)
+            if ref_resp.status_code == 200:
+                sha = ref_resp.json()['object']['sha']
+                create_resp = requests.post(
+                    f"https://api.github.com/repos/{user}/{repo}/git/refs", 
+                    json={"ref": f"refs/heads/{new_branch}", "sha": sha}, 
+                    headers=headers
+                )
+                if create_resp.status_code == 201:
                     print(f"Remote branch {new_branch} created.")
                 else:
-                    print(f"Error: {ref_data.get('message', 'Base branch main not found.')}")
+                    print(f"Error {create_resp.status_code}: {create_resp.text}")
+            else:
+                print(f"Error {ref_resp.status_code}: {ref_resp.text}")
 
-    except IndexError:
-        print("Error: Missing arguments for the command.")
+    except (IndexError, requests.exceptions.RequestException) as e:
+        print(f"Error: {e}")
     except KeyboardInterrupt:
-        print("\nOperation cancelled by user.")
         sys.exit(1)
 
 if __name__ == "__main__":
