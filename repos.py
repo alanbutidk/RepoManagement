@@ -57,6 +57,16 @@ def main():
                   "\n--commit <\"NameOfCommit\">: Adds a commit using the name given as the argument"
                   "\n--makebranch <User> <Repo> <branchname>: Creates a remote branch"
                   "\n--makerelease <User> <Repo> <Executable/Directory/.> -tag <v1.0.0>: Creates a GitHub release using RELEASE.md in the given path"
+                  "\n--listrepos <User>: Lists all repos for a user"
+                  "\n--listbranches <User> <Repo>: Lists all branches in a repo"
+                  "\n--makePR <User> <Repo> <head> <base> <Title>: Opens a pull request from head into base"
+                  "\n--clonerepo <User> <Repo>: Clones a repo by user and name"
+                  "\n--GenToken <TokenName>: Generates a new GitHub token (requires token with admin:org scope)"
+                  "\n--getrelease <User> <Repo> <Tag> <OSType> <Arch>: Downloads a release asset matching OS and architecture"
+                  "\n--getrelease <User> <Repo> <Tag> <Filename.ext>: Downloads a specific named asset from a release"
+                  "\n--getrelease <User> <Repo> Source-<.zip/.gz>: Downloads the release source archive in the given format"
+                  "\n--deletefile <User> <Repo> <Branch> <Filename.Format>: Deletes a file from a branch"
+                  "\n--deleterelease <User> <Repo> <Tag> <Filename.Format> [OSName] [Arch]: Deletes a release asset by name, optionally filtered by OS and arch"
                   "\n--cleartoken: Clears the stored GitHub token")
             return
 
@@ -210,6 +220,308 @@ def main():
                         print("No executable asset found to upload.")
                 else:
                     print(f"Release failed {release_resp.status_code}: {release_resp.text}")
+
+        if "--listrepos" in args:
+            idx = args.index("--listrepos")
+            user = args[idx + 1]
+            page = 1
+            all_repos = []
+            while True:
+                resp = requests.get(
+                    f"https://api.github.com/users/{user}/repos",
+                    params={"per_page": 100, "page": page},
+                    headers=headers
+                )
+                if resp.status_code == 200:
+                    batch = resp.json()
+                    if not batch:
+                        break
+                    all_repos.extend(batch)
+                    page += 1
+                else:
+                    print(f"Error {resp.status_code}: {resp.text}")
+                    break
+            if all_repos:
+                print(f"Repositories for {user} ({len(all_repos)} total):")
+                for r in all_repos:
+                    visibility = "private" if r.get("private") else "public"
+                    print(f"  {r['name']} [{visibility}] - {r.get('description') or 'No description'}")
+            else:
+                print(f"No repositories found for {user}.")
+
+        if "--listbranches" in args:
+            idx = args.index("--listbranches")
+            user, repo = args[idx + 1], args[idx + 2]
+            resp = requests.get(
+                f"https://api.github.com/repos/{user}/{repo}/branches",
+                params={"per_page": 100},
+                headers=headers
+            )
+            if resp.status_code == 200:
+                branches = resp.json()
+                print(f"Branches in {user}/{repo} ({len(branches)} total):")
+                for b in branches:
+                    print(f"  {b['name']}")
+            else:
+                print(f"Error {resp.status_code}: {resp.text}")
+
+        if "--makePR" in args:
+            idx = args.index("--makePR")
+            user, repo, head, base, title = args[idx + 1], args[idx + 2], args[idx + 3], args[idx + 4], args[idx + 5]
+            resp = requests.post(
+                f"https://api.github.com/repos/{user}/{repo}/pulls",
+                json={"title": title, "head": head, "base": base},
+                headers=headers
+            )
+            if resp.status_code == 201:
+                pr = resp.json()
+                print(f"Pull request created: {pr['html_url']}")
+            else:
+                print(f"PR failed {resp.status_code}: {resp.text}")
+
+        if "--clonerepo" in args:
+            idx = args.index("--clonerepo")
+            user, repo = args[idx + 1], args[idx + 2]
+            clone_url = f"https://github.com/{user}/{repo}.git"
+            result = s.run(["git", "clone", clone_url])
+            if result.returncode == 0:
+                print(f"Cloned {user}/{repo} successfully.")
+            else:
+                print(f"Clone failed for {user}/{repo}.")
+
+        if "--GenToken" in args:
+            idx = args.index("--GenToken")
+            token_name = args[idx + 1]
+            resp = requests.post(
+                "https://api.github.com/user/tokens",
+                json={
+                    "name": token_name,
+                    "scopes": ["repo", "read:org", "workflow"]
+                },
+                headers=headers
+            )
+            if resp.status_code == 201:
+                new_token = resp.json().get("token")
+                print(f"New token generated: {new_token}")
+                print("Save this token now, it will not be shown again.")
+            elif resp.status_code == 404:
+                print("Token generation not supported via this API endpoint. Use GitHub Settings > Developer settings > Personal access tokens.")
+            elif resp.status_code == 403:
+                print("Permission denied. Your current token does not have the scope to generate new tokens.")
+            else:
+                print(f"GenToken failed {resp.status_code}: {resp.text}")
+
+        if "--getrelease" in args:
+            idx = args.index("--getrelease")
+            user, repo = args[idx + 1], args[idx + 2]
+            fourth_arg = args[idx + 3]
+
+            if fourth_arg.startswith("Source-"):
+                ext = fourth_arg.split("Source-")[1].lower()
+                tag = args[idx + 4] if len(args) > idx + 4 and not args[idx + 4].startswith("--") else "latest"
+
+                if tag == "latest":
+                    rel_resp = requests.get(f"https://api.github.com/repos/{user}/{repo}/releases/latest", headers=headers)
+                else:
+                    rel_resp = requests.get(f"https://api.github.com/repos/{user}/{repo}/releases/tags/{tag}", headers=headers)
+
+                if rel_resp.status_code != 200:
+                    print(f"Release fetch failed {rel_resp.status_code}: {rel_resp.text}")
+                else:
+                    rel_data = rel_resp.json()
+                    actual_tag = rel_data["tag_name"]
+                    if ext in (".zip", "zip"):
+                        download_url = rel_data.get("zipball_url")
+                        out_file = f"{repo}-{actual_tag}.zip"
+                    elif ext in (".gz", "tar.gz", "gz"):
+                        download_url = rel_data.get("tarball_url")
+                        out_file = f"{repo}-{actual_tag}.tar.gz"
+                    else:
+                        print(f"Unknown source format: {ext}. Use .zip or .gz")
+                        download_url = None
+
+                    if download_url:
+                        print(f"Downloading source {ext} for {user}/{repo} {actual_tag}...")
+                        dl = requests.get(download_url, headers=headers, stream=True, allow_redirects=True)
+                        with open(out_file, "wb") as f:
+                            for chunk in dl.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        print(f"Saved: {out_file}")
+
+            elif len(args) > idx + 4 and '.' in args[idx + 4] and not args[idx + 4].startswith("--"):
+                tag = fourth_arg
+                filename = args[idx + 4]
+
+                if tag == "latest":
+                    rel_resp = requests.get(f"https://api.github.com/repos/{user}/{repo}/releases/latest", headers=headers)
+                else:
+                    rel_resp = requests.get(f"https://api.github.com/repos/{user}/{repo}/releases/tags/{tag}", headers=headers)
+
+                if rel_resp.status_code != 200:
+                    print(f"Release fetch failed {rel_resp.status_code}: {rel_resp.text}")
+                else:
+                    rel_data = rel_resp.json()
+                    actual_tag = rel_data["tag_name"]
+                    assets = rel_data.get("assets", [])
+                    matched = next((a for a in assets if a["name"].lower() == filename.lower()), None)
+                    if not matched:
+                        print(f"Asset '{filename}' not found in release {actual_tag}.")
+                        print("Available assets:")
+                        for asset in assets:
+                            print(f"  {asset['name']}")
+                    else:
+                        out_file = matched["name"]
+                        download_url = matched["browser_download_url"]
+                        print(f"Downloading {out_file} from {user}/{repo} {actual_tag}...")
+                        dl = requests.get(download_url, headers=headers, stream=True, allow_redirects=True)
+                        with open(out_file, "wb") as f:
+                            for chunk in dl.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        print(f"Saved: {out_file}")
+
+            else:
+                tag, os_type, arch = fourth_arg, args[idx + 4], args[idx + 5]
+
+                os_aliases = {
+                    "windows": ["windows", "win", "win32", "win64"],
+                    "linux":   ["linux"],
+                    "macos":   ["macos", "darwin", "osx", "mac"],
+                }
+                arch_aliases = {
+                    "x86_64": ["x86_64", "amd64", "x64"],
+                    "x86":    ["x86", "i386", "i686", "32bit"],
+                    "arm64":  ["arm64", "aarch64"],
+                    "arm":    ["arm", "armv7"],
+                }
+
+                os_lower = os_type.lower()
+                arch_lower = arch.lower()
+
+                matched_os_terms = next((v for v in os_aliases.values() if os_lower in v), [os_lower])
+                matched_arch_terms = next((v for v in arch_aliases.values() if arch_lower in v), [arch_lower])
+
+                if tag == "latest":
+                    rel_resp = requests.get(f"https://api.github.com/repos/{user}/{repo}/releases/latest", headers=headers)
+                else:
+                    rel_resp = requests.get(f"https://api.github.com/repos/{user}/{repo}/releases/tags/{tag}", headers=headers)
+
+                if rel_resp.status_code != 200:
+                    print(f"Release fetch failed {rel_resp.status_code}: {rel_resp.text}")
+                else:
+                    rel_data = rel_resp.json()
+                    actual_tag = rel_data["tag_name"]
+                    assets = rel_data.get("assets", [])
+
+                    matched = None
+                    for asset in assets:
+                        name_lower = asset["name"].lower()
+                        os_match = any(term in name_lower for term in matched_os_terms)
+                        arch_match = any(term in name_lower for term in matched_arch_terms)
+                        if os_match and arch_match:
+                            matched = asset
+                            break
+
+                    if not matched:
+                        print(f"No asset found matching OS '{os_type}' and arch '{arch}' in release {actual_tag}.")
+                        print("Available assets:")
+                        for asset in assets:
+                            print(f"  {asset['name']}")
+                    else:
+                        out_file = matched["name"]
+                        download_url = matched["browser_download_url"]
+                        print(f"Downloading {out_file} from {user}/{repo} {actual_tag}...")
+                        dl = requests.get(download_url, headers=headers, stream=True, allow_redirects=True)
+                        with open(out_file, "wb") as f:
+                            for chunk in dl.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        print(f"Saved: {out_file}")
+
+        if "--deletefile" in args:
+            idx = args.index("--deletefile")
+            user, repo, branch, filename = args[idx + 1], args[idx + 2], args[idx + 3], args[idx + 4]
+
+            file_resp = requests.get(
+                f"https://api.github.com/repos/{user}/{repo}/contents/{filename}",
+                params={"ref": branch},
+                headers=headers
+            )
+            if file_resp.status_code != 200:
+                print(f"File '{filename}' not found on branch '{branch}': {file_resp.status_code}")
+            else:
+                sha = file_resp.json()["sha"]
+                del_resp = requests.delete(
+                    f"https://api.github.com/repos/{user}/{repo}/contents/{filename}",
+                    json={"message": f"Delete {filename}", "sha": sha, "branch": branch},
+                    headers=headers
+                )
+                if del_resp.status_code == 200:
+                    print(f"Deleted '{filename}' from {user}/{repo} on branch '{branch}'.")
+                else:
+                    print(f"Delete failed {del_resp.status_code}: {del_resp.text}")
+
+        if "--deleterelease" in args:
+            idx = args.index("--deleterelease")
+            user, repo, tag = args[idx + 1], args[idx + 2], args[idx + 3]
+            filename = args[idx + 4] if len(args) > idx + 4 else None
+            os_filter = args[idx + 5].lower() if len(args) > idx + 5 else None
+            arch_filter = args[idx + 6].lower() if len(args) > idx + 6 else None
+
+            rel_resp = requests.get(
+                f"https://api.github.com/repos/{user}/{repo}/releases/tags/{tag}",
+                headers=headers
+            )
+            if rel_resp.status_code != 200:
+                print(f"Release '{tag}' not found: {rel_resp.status_code}")
+            else:
+                assets = rel_resp.json().get("assets", [])
+
+                if filename:
+                    base_name = filename.lower()
+                    candidates = [a for a in assets if a["name"].lower() == base_name]
+
+                    if not candidates:
+                        candidates = [a for a in assets if base_name in a["name"].lower()]
+
+                    if os_filter:
+                        os_aliases = {
+                            "windows": ["windows", "win", "win32", "win64"],
+                            "linux":   ["linux"],
+                            "macos":   ["macos", "darwin", "osx", "mac"],
+                        }
+                        os_terms = next((v for v in os_aliases.values() if os_filter in v), [os_filter])
+                        candidates = [a for a in candidates if any(t in a["name"].lower() for t in os_terms)]
+
+                    if arch_filter:
+                        arch_aliases = {
+                            "x86_64": ["x86_64", "amd64", "x64"],
+                            "x86":    ["x86", "i386", "i686", "32bit"],
+                            "arm64":  ["arm64", "aarch64"],
+                            "arm":    ["arm", "armv7"],
+                        }
+                        arch_terms = next((v for v in arch_aliases.values() if arch_filter in v), [arch_filter])
+                        candidates = [a for a in candidates if any(t in a["name"].lower() for t in arch_terms)]
+                else:
+                    candidates = assets
+
+                if not candidates:
+                    print(f"No matching assets found in release '{tag}'.")
+                    print("Available assets:")
+                    for a in assets:
+                        print(f"  {a['name']}")
+                elif len(candidates) > 1:
+                    print(f"Multiple assets matched — please be more specific:")
+                    for a in candidates:
+                        print(f"  {a['name']}")
+                else:
+                    asset = candidates[0]
+                    del_resp = requests.delete(
+                        f"https://api.github.com/repos/{user}/{repo}/releases/assets/{asset['id']}",
+                        headers=headers
+                    )
+                    if del_resp.status_code == 204:
+                        print(f"Deleted asset '{asset['name']}' from release '{tag}'.")
+                    else:
+                        print(f"Asset delete failed {del_resp.status_code}: {del_resp.text}")
 
     except (IndexError, requests.exceptions.RequestException) as e:
         print(f"Error: {e}")
