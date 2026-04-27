@@ -31,7 +31,7 @@ _All done! Your *RepoM* setup has been completed for later uses_
 # Token Making (Important!)
 To make a Classic token or a PAT, follow these steps:
 
-+ Go to [Token Making/Handling Page] (https://github.com/settings/tokens) or https://github.com/settings/tokens.
++ Go to [Token Making/Handling Page](https://github.com/settings/tokens)  or https://github.com/settings/tokens.
 + Click on ```Personal Access Tokens```, and click on ```Tokens (Classic)```
 + Click on the ```Generate New Token``` button, and click on ```Generate New Token (Classic)```
 + Now, do whatever security checkup github gives you (Like a passkey)
