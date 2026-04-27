@@ -61,7 +61,7 @@ To add *RepoM* to your PATH, follow these steps:
 + If it returns, Bash or Zsh, Do the below:
 
 ### For Bash:
-+ Open ~/.zshrc in any text editor
++ Open ~/.bashrc in any text editor
 + Scroll to the bottom of the file, and do ```export PATH="$PATH:/your/new/path"```, but the /your/new/path is a placeholder to the path where the executable lives.
 + Do ```source ~./bashrc```
 ### For Zsh:
