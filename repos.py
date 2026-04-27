@@ -38,7 +38,7 @@ def get_shared_token():
 def main():
     try:
         if len(sys.argv) == 1:
-            print("RepoManagement Wrapper for git and gh\nUsage: repom --<MyCommand>")
+            print("RepoManagement Wrapper for git and Github REST API\nUsage: repom --<MyCommand>")
             return
 
         args = sys.argv[1:]
